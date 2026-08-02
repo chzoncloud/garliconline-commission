@@ -284,25 +284,27 @@ btnProcess.addEventListener('click', () => {
   reader.onload = e => {
     try {
       const data = new Uint8Array(e.target.result);
-      const wb = XLSX.read(data, { type: 'array', raw: true, cellText: false });
+      const wb = XLSX.read(data, { type: 'array', cellText: false });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true });
+      // Use header:'A' so rows are objects keyed by Excel column letter (A,B,...,AA,AM)
+      // This avoids sparse-array issues with numeric index approach
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 'A', defval: '', raw: true });
 
       if (rows.length < 2) { setStatus('ไม่มีข้อมูลในไฟล์', 'err'); btnProcess.disabled = false; return; }
 
-      // src col indices (0-based): A=0..G=6, AA=26, AM=38
-      const srcCols = [0,1,2,3,4,5,6,26,38];
-      const headers = rows[0];
+      const COLS = ['A','B','C','D','E','F','G','AA','AM'];
+      const hdrRow = rows[0];
+      const outHeader = COLS.map(k => hdrRow[k] || k);
 
-      // Filter rows
+      // Filter: AA=0, AM≠0, G>0
       const filtered = [];
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i];
-        const aa = toNum(row[26]);
-        const am = toNum(row[38]);
-        const g  = toNum(row[6]);
+        const aa = toNum(row['AA']);
+        const am = toNum(row['AM']);
+        const g  = toNum(row['G']);
         if (aa === 0 && am !== 0 && g > 0) {
-          filtered.push(srcCols.map(c => row[c]));
+          filtered.push(COLS.map(k => row[k]));
         }
       }
 
@@ -313,7 +315,7 @@ btnProcess.addEventListener('click', () => {
 
       // Build output worksheet data
       const outData = [];
-      outData.push(srcCols.map(c => headers[c] || ''));  // header
+      outData.push(outHeader);
       filtered.forEach(r => outData.push(r));
 
       const lastDataRow = outData.length; // 1-based: will be row lastDataRow in sheet
