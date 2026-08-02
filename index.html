@@ -286,6 +286,20 @@ btnProcess.addEventListener('click', () => {
       const data = new Uint8Array(e.target.result);
       const wb = XLSX.read(data, { type: 'array', cellText: false });
       const ws = wb.Sheets[wb.SheetNames[0]];
+
+      // FIX: TikTok exports write a wrong <dimension> tag (e.g. "A1:BP2") so
+      // SheetJS only reads 2 rows even though the sheet has ~1400. openpyxl
+      // ignores dimension and reads all; SheetJS trusts !ref. Recompute the
+      // real range from the actual cells before parsing.
+      let maxR = 0, maxC = 0;
+      for (const k in ws) {
+        if (k[0] === '!') continue;
+        const c = XLSX.utils.decode_cell(k);
+        if (c.r > maxR) maxR = c.r;
+        if (c.c > maxC) maxC = c.c;
+      }
+      ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxR, c: maxC } });
+
       // Use header:'A' so rows are objects keyed by Excel column letter (A,B,...,AA,AM)
       // This avoids sparse-array issues with numeric index approach
       const rows = XLSX.utils.sheet_to_json(ws, { header: 'A', defval: '', raw: true });
@@ -308,7 +322,12 @@ btnProcess.addEventListener('click', () => {
         }
       }
 
-      if (filtered.length === 0) { setStatus('ไม่มี row ที่ผ่าน filter', 'err'); btnProcess.disabled = false; return; }
+      if (filtered.length === 0) {
+        // Debug: show what row 2 looks like
+        const r2 = rows[1] || {};
+        setStatus(`ไม่มี row ที่ผ่าน filter — ตัวอย่าง row 2: G="${r2['G']}", AA="${r2['AA']}", AM="${r2['AM']}"`, 'err');
+        btnProcess.disabled = false; return;
+      }
 
       const totalG = filtered.reduce((s, r) => s + toNum(r[6]), 0);
       const comm   = totalG * 0.06;
