@@ -11,6 +11,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <title>คำนวณค่าคอม Creator — garlconline</title>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@700;800&family=Sarabun:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -224,7 +225,7 @@
 </div>
 
 <script>
-let workbookOut = null;
+let outState = null;
 let outFilename = '';
 
 const dropZone   = document.getElementById('drop-zone');
@@ -256,7 +257,7 @@ function loadFile(f) {
   fnTag.classList.add('show');
   btnProcess.disabled = false;
   resultBox.classList.remove('show');
-  workbookOut = null;
+  outState = null;
   setStatus('');
 }
 
@@ -354,66 +355,10 @@ btnProcess.addEventListener('click', () => {
       const totalG = filtered.reduce((s, r) => s + toNum(r[6]), 0);
       const comm   = totalG * 0.06;
 
-      // Build output worksheet data
-      const outData = [];
-      outData.push(outHeader);
-      filtered.forEach(r => outData.push(r));
-
-      const lastDataRow = outData.length; // 1-based: will be row lastDataRow in sheet
-
-      // SUBTOTAL row
-      outData.push(['รายได้รวม (SUBTOTAL)', '', '', '', '', '', totalG, '', '']);
-      const subtotalRowIdx = outData.length;
-
-      // 6% row
-      outData.push(['ค่าคอม 6%', '', '', '', '', '', comm, '', '']);
-      const commRowIdx = outData.length;
-
-      // Create worksheet
-      const wsOut = XLSX.utils.aoa_to_sheet(outData);
-
-      // Style helpers
-      const yellow = { fgColor: { rgb: 'FFD700' } };
-      const green  = { fgColor: { rgb: '2d9e5f' } };
-      const hdr    = { fgColor: { rgb: '1a6b3c' } };
-
-      function cellRef(r, c) { return XLSX.utils.encode_cell({ r, c }); }
-
-      // Header row (row 0)
-      for (let c = 0; c < 9; c++) {
-        const ref = cellRef(0, c);
-        if (!wsOut[ref]) wsOut[ref] = {};
-        wsOut[ref].s = { fill: { patternType: 'solid', ...hdr }, font: { bold: true, color: { rgb: 'FFFFFF' } } };
-      }
-
-      // SUBTOTAL row
-      const sr = subtotalRowIdx - 1;
-      for (let c = 0; c < 9; c++) {
-        const ref = cellRef(sr, c);
-        if (!wsOut[ref]) wsOut[ref] = { t: 'z', v: '' };
-        wsOut[ref].s = { fill: { patternType: 'solid', ...yellow }, font: { bold: true } };
-      }
-      wsOut[cellRef(sr, 6)].z = '#,##0.00';
-
-      // Commission row
-      const cr = commRowIdx - 1;
-      for (let c = 0; c < 9; c++) {
-        const ref = cellRef(cr, c);
-        if (!wsOut[ref]) wsOut[ref] = { t: 'z', v: '' };
-        wsOut[ref].s = { fill: { patternType: 'solid', ...green }, font: { bold: true, color: { rgb: 'FFFFFF' } } };
-      }
-      wsOut[cellRef(cr, 6)].z = '#,##0.00';
-
-      // Number format for col G data rows
-      for (let r = 1; r <= lastDataRow - 1; r++) {
-        const ref = cellRef(r, 6);
-        if (wsOut[ref]) wsOut[ref].z = '#,##0.00';
-      }
-
-      const wbOut = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wbOut, wsOut, 'income');
-
-      workbookOut = wbOut;
+      // Stash the result. The colored .xlsx is built with ExcelJS at download
+      // time — SheetJS's free build silently drops cell fills, which is why the
+      // header/subtotal/commission colors were missing from the output file.
+      outState = { outHeader, filtered, totalG, comm };
       outFilename = rawFile.name.replace(/\.xlsx?$/i, '') + '_processed.xlsx';
 
       // Update UI
@@ -430,9 +375,65 @@ btnProcess.addEventListener('click', () => {
   reader.readAsArrayBuffer(rawFile);
 });
 
-btnDl.addEventListener('click', () => {
-  if (!workbookOut) return;
-  XLSX.writeFile(workbookOut, outFilename, { bookSST: false, cellStyles: true });
+btnDl.addEventListener('click', async () => {
+  if (!outState) return;
+  const { outHeader, filtered, totalG, comm } = outState;
+  const NCOL = outHeader.length;     // 9
+  const REV = 7;                     // revenue is the 7th column (1-based)
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('income');
+
+  const GREEN_HDR = 'FF1A6B3C';      // dark green header
+  const YELLOW    = 'FFFFD700';      // subtotal
+  const GREEN     = 'FF2D9E5F';      // 6% row
+  const numFmt    = '#,##0.00';
+
+  function paintRow(row, argb, fontColor) {
+    for (let c = 1; c <= NCOL; c++) {
+      const cell = row.getCell(c);
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
+      cell.font = { bold: true, color: fontColor ? { argb: fontColor } : undefined };
+    }
+  }
+
+  // Header
+  const hRow = ws.addRow(outHeader);
+  paintRow(hRow, GREEN_HDR, 'FFFFFFFF');
+
+  // Data rows
+  filtered.forEach(r => {
+    const row = ws.addRow(r);
+    const rev = row.getCell(REV);
+    rev.value = Number(String(rev.value).replace(/,/g, '')) || 0;
+    rev.numFmt = numFmt;
+  });
+
+  // SUBTOTAL (yellow)
+  const subArr = new Array(NCOL).fill('');
+  subArr[0] = 'รายได้รวม (SUBTOTAL)';
+  subArr[REV - 1] = totalG;
+  const subRow = ws.addRow(subArr);
+  paintRow(subRow, YELLOW, '000000');
+  subRow.getCell(REV).numFmt = numFmt;
+
+  // 6% commission (green)
+  const commArr = new Array(NCOL).fill('');
+  commArr[0] = 'ค่าคอม 6%';
+  commArr[REV - 1] = comm;
+  const commRow = ws.addRow(commArr);
+  paintRow(commRow, GREEN, 'FFFFFFFF');
+  commRow.getCell(REV).numFmt = numFmt;
+
+  // Column widths
+  ws.columns.forEach((col, i) => { col.width = [24, 14, 13, 13, 8, 14, 13, 22, 22][i] || 14; });
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = outFilename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 </script>
 </body>
