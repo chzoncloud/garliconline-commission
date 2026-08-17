@@ -306,26 +306,48 @@ btnProcess.addEventListener('click', () => {
 
       if (rows.length < 2) { setStatus('ไม่มีข้อมูลในไฟล์', 'err'); btnProcess.disabled = false; return; }
 
-      const COLS = ['A','B','C','D','E','F','G','AA','AM'];
       const hdrRow = rows[0];
+
+      // Resolve filter columns BY HEADER NAME, not by fixed letter. TikTok
+      // occasionally inserts a column which shifts every letter after it
+      // (Aug 2026: added "Guarantee program reimbursement" so affiliate AA→AB
+      // and live-coupon AM→AN). Matching the header text survives those shifts.
+      function findCol(name) {
+        for (const k in hdrRow) {
+          if (k[0] === '!') continue;
+          if (String(hdrRow[k]).trim() === name) return k;
+        }
+        return null;
+      }
+      const colRev  = findCol('รายได้รวม');
+      const colAff  = findCol('ค่าคอมมิชชั่นแอฟฟิลิเอต');
+      const colLive = findCol('ค่าบริการของคูปองไลฟ์คุ้ม');
+
+      const missing = [];
+      if (!colRev)  missing.push('รายได้รวม');
+      if (!colAff)  missing.push('ค่าคอมมิชชั่นแอฟฟิลิเอต');
+      if (!colLive) missing.push('ค่าบริการของคูปองไลฟ์คุ้ม');
+      if (missing.length) {
+        setStatus('หาคอลัมน์ไม่เจอ (TikTok อาจเปลี่ยนชื่อหัวคอลัมน์): ' + missing.join(', '), 'err');
+        btnProcess.disabled = false; return;
+      }
+
+      // Output columns: order info A–F, then revenue, affiliate, live-coupon.
+      // Revenue is always at output index 6 (used by totals/formatting below).
+      const COLS = ['A','B','C','D','E','F', colRev, colAff, colLive];
       const outHeader = COLS.map(k => hdrRow[k] || k);
 
-      // Filter: AA=0, AM≠0, G>0
+      // Filter: affiliate commission = 0, live-coupon fee ≠ 0, revenue > 0
       const filtered = [];
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i];
-        const aa = toNum(row['AA']);
-        const am = toNum(row['AM']);
-        const g  = toNum(row['G']);
-        if (aa === 0 && am !== 0 && g > 0) {
+        if (toNum(row[colAff]) === 0 && toNum(row[colLive]) !== 0 && toNum(row[colRev]) > 0) {
           filtered.push(COLS.map(k => row[k]));
         }
       }
 
       if (filtered.length === 0) {
-        // Debug: show what row 2 looks like
-        const r2 = rows[1] || {};
-        setStatus(`ไม่มี row ที่ผ่าน filter — ตัวอย่าง row 2: G="${r2['G']}", AA="${r2['AA']}", AM="${r2['AM']}"`, 'err');
+        setStatus(`ไม่มี row ที่ผ่าน filter (อ่านไฟล์ครบ ${rows.length - 1} แถวแล้ว) — งวดนี้อาจไม่มีรายการไลฟ์คุ้ม`, 'err');
         btnProcess.disabled = false; return;
       }
 
