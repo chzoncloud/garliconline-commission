@@ -109,6 +109,17 @@
   }
   .btn-download:hover { background: #e0243d; }
 
+  .btn-print {
+    background: #1a6b3c;
+    color: #fff;
+    width: 100%;
+    padding: 14px;
+    font-size: 16px;
+    border-radius: 10px;
+    margin-top: 8px;
+  }
+  .btn-print:hover { background: #14562f; }
+
   .result-box {
     display: none;
     background: #111;
@@ -221,6 +232,7 @@
       <span class="result-value pink" id="r-comm">—</span>
     </div>
     <button class="btn btn-download" id="btn-download">⬇ ดาวน์โหลด Excel</button>
+    <button class="btn btn-print" id="btn-print">🖨 Print / บันทึกเป็น PDF</button>
   </div>
 </div>
 
@@ -232,6 +244,28 @@ const dropZone   = document.getElementById('drop-zone');
 const fileInput  = document.getElementById('file-input');
 const btnProcess = document.getElementById('btn-process');
 const btnDl      = document.getElementById('btn-download');
+const btnPrint   = document.getElementById('btn-print');
+
+// TikTok's newer exports store the 18-digit order number as a float, so its
+// last digit(s) are already lost at the source (unrecoverable). At least show
+// it as a plain integer instead of scientific notation like "5.8E+17".
+function orderStr(v) {
+  return (typeof v === 'number' && isFinite(v)) ? v.toFixed(0) : String(v == null ? '' : v);
+}
+
+// Build filename from the payment-date range in the data (column D of output).
+// e.g. min 2026/08/01, max 2026/08/15 -> "1-15Aug2026". This reflects the real
+// payout window, not the download timestamp.
+function payoutName(filteredRows) {
+  const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const parse = s => { const m = String(s).match(/(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})/); return m ? { y: +m[1], mo: +m[2], d: +m[3] } : null; };
+  const dates = filteredRows.map(r => parse(r[3])).filter(Boolean).sort((a, b) => (a.y-b.y)||(a.mo-b.mo)||(a.d-b.d));
+  if (!dates.length) return 'commission';
+  const a = dates[0], b = dates[dates.length - 1];
+  return (a.mo === b.mo && a.y === b.y)
+    ? `${a.d}-${b.d}${MON[a.mo-1]}${a.y}`
+    : `${a.d}${MON[a.mo-1]}-${b.d}${MON[b.mo-1]}${b.y}`;
+}
 const statusEl   = document.getElementById('status');
 const resultBox  = document.getElementById('result-box');
 const fnTag      = document.getElementById('filename-tag');
@@ -358,8 +392,9 @@ btnProcess.addEventListener('click', () => {
       // Stash the result. The colored .xlsx is built with ExcelJS at download
       // time — SheetJS's free build silently drops cell fills, which is why the
       // header/subtotal/commission colors were missing from the output file.
-      outState = { outHeader, filtered, totalG, comm };
-      outFilename = rawFile.name.replace(/\.xlsx?$/i, '') + '_processed.xlsx';
+      const dateName = payoutName(filtered);
+      outState = { outHeader, filtered, totalG, comm, dateName };
+      outFilename = dateName + '_processed.xlsx';
 
       // Update UI
       document.getElementById('r-rows').textContent  = filtered.length.toLocaleString() + ' rows';
@@ -404,6 +439,8 @@ btnDl.addEventListener('click', async () => {
   // Data rows
   filtered.forEach(r => {
     const row = ws.addRow(r);
+    const oc = row.getCell(1);                       // order number -> plain text (avoid scientific)
+    if (typeof oc.value === 'number') oc.value = oc.value.toFixed(0);
     const rev = row.getCell(REV);
     rev.value = Number(String(rev.value).replace(/,/g, '')) || 0;
     rev.numFmt = numFmt;
@@ -434,6 +471,60 @@ btnDl.addEventListener('click', async () => {
   const a = document.createElement('a');
   a.href = url; a.download = outFilename; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+// ---- Print / Save as PDF (landscape, colored, filename = payout date range) ----
+btnPrint.addEventListener('click', () => {
+  if (!outState) return;
+  const { outHeader, filtered, totalG, comm, dateName } = outState;
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const money = n => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  // Column widths (%) tuned to the sample layout — order no widest, currency narrow.
+  const W = [15, 9, 11, 11, 6, 11, 11, 13, 13];
+  const colgroup = W.map(w => `<col style="width:${w}%">`).join('');
+  const thead = '<tr>' + outHeader.map(h => `<th>${esc(h)}</th>`).join('') + '</tr>';
+  const body = filtered.map(r =>
+    '<tr>' + r.map((v, i) => `<td class="${i >= 4 ? 'num' : ''}">${esc(i === 0 ? orderStr(v) : v)}</td>`).join('') + '</tr>'
+  ).join('');
+  const subCells = outHeader.map((_, i) =>
+    i === 0 ? '<td>รายได้รวม (SUBTOTAL)</td>' : i === 6 ? `<td class="num">${money(totalG)}</td>` : '<td></td>'
+  ).join('');
+  const commCells = outHeader.map((_, i) =>
+    i === 0 ? '<td>ค่าคอม 6%</td>' : i === 6 ? `<td class="num">${money(comm)}</td>` : '<td></td>'
+  ).join('');
+
+  const html = `<!DOCTYPE html><html lang="th"><head><meta charset="UTF-8">
+<title>${esc(dateName)}</title>
+<style>
+  @page { size: A4 landscape; margin: 8mm; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-sizing: border-box; }
+  body { font-family: 'Sarabun','Tahoma','Segoe UI',sans-serif; margin: 0; color: #111; }
+  h1 { font-size: 15px; margin: 0 0 6px; }
+  .sub { font-size: 10px; color: #555; margin: 0 0 10px; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  th, td { border: 1px solid #cfcfcf; padding: 3px 4px; font-size: 8px; word-break: break-word; text-align: left; }
+  thead th { background: #1a6b3c; color: #fff; font-weight: 700; }
+  td.num { text-align: right; }
+  tr.subtotal td { background: #ffd700; color: #000; font-weight: 700; font-size: 9px; }
+  tr.comm td { background: #2d9e5f; color: #fff; font-weight: 700; font-size: 9px; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+</style></head><body>
+<h1>ค่าคอม Creator ไลฟ์ garliconline · ${esc(dateName)}</h1>
+<p class="sub">${filtered.length.toLocaleString()} รายการ · รายได้รวม ฿${money(totalG)} · ค่าคอม 6% = ฿${money(comm)}</p>
+<table><colgroup>${colgroup}</colgroup>
+<thead>${thead}</thead>
+<tbody>${body}<tr class="subtotal">${subCells}</tr><tr class="comm">${commCells}</tr></tbody>
+</table>
+<script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>
+</body></html>`;
+
+  const w = window.open('', '_blank');
+  if (!w) { setStatus('เบราว์เซอร์บล็อก popup — กดอนุญาต popup แล้วลองใหม่', 'err'); return; }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
 });
 </script>
 </body>
