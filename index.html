@@ -347,14 +347,17 @@ btnProcess.addEventListener('click', () => {
       // occasionally inserts a column which shifts every letter after it
       // (Aug 2026: added "Guarantee program reimbursement" so affiliate AA→AB
       // and live-coupon AM→AN). Matching the header text survives those shifts.
-      function findCol(name) {
+      // Accepts a single name or a list of aliases — TikTok also renames
+      // headers over time (Sep 2026: revenue "รายได้รวม" -> "รายได้ทั้งหมด").
+      function findCol(names) {
+        const list = Array.isArray(names) ? names : [names];
         for (const k in hdrRow) {
           if (k[0] === '!') continue;
-          if (String(hdrRow[k]).trim() === name) return k;
+          if (list.includes(String(hdrRow[k]).trim())) return k;
         }
         return null;
       }
-      const colRev  = findCol('รายได้รวม');
+      const colRev  = findCol(['รายได้รวม', 'รายได้ทั้งหมด']);
       const colAff  = findCol('ค่าคอมมิชชั่นแอฟฟิลิเอต');
       const colLive = findCol('ค่าบริการของคูปองไลฟ์คุ้ม');
 
