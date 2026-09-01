@@ -12,6 +12,9 @@
 <title>คำนวณค่าคอม Creator — garlconline</title>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="sarabun-font.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@700;800&family=Sarabun:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -389,14 +392,15 @@ btnProcess.addEventListener('click', () => {
         btnProcess.disabled = false; return;
       }
 
-      const totalG = filtered.reduce((s, r) => s + toNum(r[6]), 0);
+      const totalF = filtered.reduce((s, r) => s + toNum(r[5]), 0); // จำนวนเงินที่ชำระทั้งหมด
+      const totalG = filtered.reduce((s, r) => s + toNum(r[6]), 0); // รายได้ (ฐานค่าคอม)
       const comm   = totalG * 0.06;
 
       // Stash the result. The colored .xlsx is built with ExcelJS at download
       // time — SheetJS's free build silently drops cell fills, which is why the
       // header/subtotal/commission colors were missing from the output file.
       const dateName = payoutName(filtered);
-      outState = { outHeader, filtered, totalG, comm, dateName };
+      outState = { outHeader, filtered, totalF, totalG, comm, dateName };
       outFilename = dateName + '_processed.xlsx';
 
       // Update UI
@@ -415,8 +419,9 @@ btnProcess.addEventListener('click', () => {
 
 btnDl.addEventListener('click', async () => {
   if (!outState) return;
-  const { outHeader, filtered, totalG, comm } = outState;
+  const { outHeader, filtered, totalF, totalG, comm } = outState;
   const NCOL = outHeader.length;     // 9
+  const PAY = 6;                     // จำนวนเงินที่ชำระทั้งหมด = 6th column (1-based)
   const REV = 7;                     // revenue is the 7th column (1-based)
 
   const wb = new ExcelJS.Workbook();
@@ -449,12 +454,14 @@ btnDl.addEventListener('click', async () => {
     rev.numFmt = numFmt;
   });
 
-  // SUBTOTAL (yellow)
+  // SUBTOTAL (yellow) — sum both payment total (F) and revenue (G)
   const subArr = new Array(NCOL).fill('');
-  subArr[0] = 'รายได้รวม (SUBTOTAL)';
+  subArr[0] = 'รวม (SUBTOTAL)';
+  subArr[PAY - 1] = totalF;
   subArr[REV - 1] = totalG;
   const subRow = ws.addRow(subArr);
   paintRow(subRow, YELLOW, '000000');
+  subRow.getCell(PAY).numFmt = numFmt;
   subRow.getCell(REV).numFmt = numFmt;
 
   // 6% commission (green)
@@ -476,58 +483,57 @@ btnDl.addEventListener('click', async () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
-// ---- Print / Save as PDF (landscape, colored, filename = payout date range) ----
+// ---- Save as PDF directly (jsPDF — guaranteed A4 landscape, no print dialog) ----
 btnPrint.addEventListener('click', () => {
   if (!outState) return;
-  const { outHeader, filtered, totalG, comm, dateName } = outState;
-  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const { outHeader, filtered, totalF, totalG, comm, dateName } = outState;
   const money = n => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  // Column widths (%) tuned to the sample layout — order no widest, currency narrow.
-  const W = [15, 9, 11, 11, 6, 11, 11, 13, 13];
-  const colgroup = W.map(w => `<col style="width:${w}%">`).join('');
-  const thead = '<tr>' + outHeader.map(h => `<th>${esc(h)}</th>`).join('') + '</tr>';
-  const body = filtered.map(r =>
-    '<tr>' + r.map((v, i) => `<td class="${i >= 4 ? 'num' : ''}">${esc(i === 0 ? orderStr(v) : v)}</td>`).join('') + '</tr>'
-  ).join('');
-  const subCells = outHeader.map((_, i) =>
-    i === 0 ? '<td>รายได้รวม (SUBTOTAL)</td>' : i === 6 ? `<td class="num">${money(totalG)}</td>` : '<td></td>'
-  ).join('');
-  const commCells = outHeader.map((_, i) =>
-    i === 0 ? '<td>ค่าคอม 6%</td>' : i === 6 ? `<td class="num">${money(comm)}</td>` : '<td></td>'
-  ).join('');
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+  doc.setFont('Sarabun');
 
-  const html = `<!DOCTYPE html><html lang="th"><head><meta charset="UTF-8">
-<title>${esc(dateName)}</title>
-<style>
-  @page { size: A4 landscape; margin: 8mm; }
-  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-sizing: border-box; }
-  body { font-family: 'Sarabun','Tahoma','Segoe UI',sans-serif; margin: 0; color: #111; }
-  h1 { font-size: 15px; margin: 0 0 6px; }
-  .sub { font-size: 10px; color: #555; margin: 0 0 10px; }
-  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-  th, td { border: 1px solid #cfcfcf; padding: 3px 4px; font-size: 8px; word-break: break-word; text-align: left; }
-  thead th { background: #1a6b3c; color: #fff; font-weight: 700; }
-  td.num { text-align: right; }
-  tr.subtotal td { background: #ffd700; color: #000; font-weight: 700; font-size: 9px; }
-  tr.comm td { background: #2d9e5f; color: #fff; font-weight: 700; font-size: 9px; }
-  thead { display: table-header-group; }
-  tr { page-break-inside: avoid; }
-</style></head><body>
-<h1>ค่าคอม Creator ไลฟ์ garliconline · ${esc(dateName)}</h1>
-<p class="sub">${filtered.length.toLocaleString()} รายการ · รายได้รวม ฿${money(totalG)} · ค่าคอม 6% = ฿${money(comm)}</p>
-<table><colgroup>${colgroup}</colgroup>
-<thead>${thead}</thead>
-<tbody>${body}<tr class="subtotal">${subCells}</tr><tr class="comm">${commCells}</tr></tbody>
-</table>
-<script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>
-</body></html>`;
+  // Data rows (order number as plain integer) + two summary rows appended.
+  const body = filtered.map(r => r.map((v, i) => (i === 0 ? orderStr(v) : String(v == null ? '' : v))));
+  const sub = new Array(outHeader.length).fill('');
+  sub[0] = 'รวม (SUBTOTAL)'; sub[5] = money(totalF); sub[6] = money(totalG);
+  const crow = new Array(outHeader.length).fill('');
+  crow[0] = 'ค่าคอม 6%'; crow[6] = money(comm);
+  body.push(sub, crow);
+  const subIdx = body.length - 2, commIdx = body.length - 1;
 
-  const w = window.open('', '_blank');
-  if (!w) { setStatus('เบราว์เซอร์บล็อก popup — กดอนุญาต popup แล้วลองใหม่', 'err'); return; }
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
+  doc.setFontSize(12);
+  doc.text(`ค่าคอม Creator ไลฟ์ garliconline · ${dateName}`, 24, 30);
+  doc.setFontSize(9);
+  doc.text(`${filtered.length.toLocaleString()} รายการ · ยอดชำระรวม ฿${money(totalF)} · รายได้รวม ฿${money(totalG)} · ค่าคอม 6% = ฿${money(comm)}`, 24, 44);
+
+  doc.autoTable({
+    head: [outHeader],
+    body,
+    startY: 54,
+    margin: { left: 24, right: 24 },
+    tableWidth: 'wrap',
+    styles: { font: 'Sarabun', fontSize: 7, cellPadding: 2.5, overflow: 'linebreak', lineColor: [200, 200, 200], lineWidth: 0.4, valign: 'middle' },
+    headStyles: { font: 'Sarabun', fontStyle: 'bold', fillColor: [26, 107, 60], textColor: 255, halign: 'center' },
+    columnStyles: {
+      0: { cellWidth: 130 },
+      1: { cellWidth: 70 },
+      2: { cellWidth: 78 },
+      3: { cellWidth: 78 },
+      4: { cellWidth: 46, halign: 'center' },
+      5: { cellWidth: 84, halign: 'right' },
+      6: { cellWidth: 74, halign: 'right' },
+      7: { cellWidth: 88, halign: 'right' },
+      8: { cellWidth: 88, halign: 'right' }
+    },
+    didParseCell: (d) => {
+      if (d.section !== 'body') return;
+      if (d.row.index === subIdx)  { d.cell.styles.fillColor = [255, 215, 0];  d.cell.styles.textColor = [0, 0, 0];       d.cell.styles.fontStyle = 'bold'; }
+      if (d.row.index === commIdx) { d.cell.styles.fillColor = [45, 158, 95]; d.cell.styles.textColor = [255, 255, 255]; d.cell.styles.fontStyle = 'bold'; }
+    }
+  });
+
+  doc.save(dateName + '.pdf');
 });
 </script>
 </body>
